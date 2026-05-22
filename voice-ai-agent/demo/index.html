@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2Care Voice AI Agent Demo</title>
+    <!-- Google Fonts for premium typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600&family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --bg-card: rgba(18, 24, 39, 0.7);
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+            
+            --color-connected: #10b981;
+            --color-disconnected: #ef4444;
+            --color-reconnecting: #f59e0b;
+            
+            --bubble-agent: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+            --bubble-patient: #334155;
+            
+            /* Latency bar colors */
+            --color-stt: #7f77dd;
+            --color-llm: #1d9e75;
+            --color-tts: #d85a30;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background: radial-gradient(circle at top left, #111827, #0b0f19 80%);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Top Header Navigation */
+        nav {
+            padding: 1.2rem 2rem;
+            background: rgba(17, 24, 39, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-glass);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #38bdf8 0%, #0d9488 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .session-info {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.05);
+            padding: 0.4rem 0.8rem;
+            border-radius: 99px;
+            border: 1px solid var(--border-glass);
+        }
+
+        /* Main Screen Layout */
+        .app-container {
+            display: flex;
+            flex: 1;
+            height: calc(100vh - 70px);
+            overflow: hidden;
+        }
+
+        /* Left Column (65% width) */
+        .main-chat-panel {
+            width: 65%;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-glass);
+            position: relative;
+            background: rgba(0, 0, 0, 0.15);
+        }
+
+        .chat-header {
+            padding: 1rem 2rem;
+            background: rgba(18, 24, 39, 0.4);
+            border-bottom: 1px solid var(--border-glass);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .chat-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--color-disconnected);
+            box-shadow: 0 0 8px var(--color-disconnected);
+            display: inline-block;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background-color: var(--color-connected);
+            box-shadow: 0 0 10px var(--color-connected);
+        }
+
+        .status-dot.reconnecting {
+            background-color: var(--color-reconnecting);
+            box-shadow: 0 0 10px var(--color-reconnecting);
+            animation: pulse 1.5s infinite alternate;
+        }
+
+        .status-text {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        /* Conversation Thread */
+        .chat-history {
+            flex: 1;
+            padding: 2rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            scroll-behavior: smooth;
+        }
+
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+        .chat-history::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 99px;
+        }
+
+        .message-row {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+        }
+
+        .message-row.patient {
+            align-items: flex-end;
+        }
+
+        .message-row.agent {
+            align-items: flex-start;
+        }
+
+        .bubble {
+            max-width: 75%;
+            padding: 1rem 1.25rem;
+            border-radius: 18px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            position: relative;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+            display: flex;
+            align-items: flex-start;
+            gap: 0.6rem;
+        }
+
+        .patient .bubble {
+            background-color: var(--bubble-patient);
+            color: var(--text-main);
+            border-bottom-right-radius: 4px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .agent .bubble {
+            background: var(--bubble-agent);
+            color: white;
+            border-bottom-left-radius: 4px;
+        }
+
+        .lang-badge {
+            font-size: 0.75rem;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.15rem 0.4rem;
+            border-radius: 4px;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.2rem;
+        }
+
+        .metadata-line {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.35rem;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        /* Mic Button Controls Area */
+        .controls-container {
+            padding: 2rem;
+            background: linear-gradient(to top, rgba(11, 15, 25, 0.95) 70%, rgba(11, 15, 25, 0));
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.8rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .mic-btn-wrapper {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .mic-btn {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(55, 65, 81, 0.5);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+            z-index: 2;
+        }
+
+        .mic-btn:hover {
+            transform: scale(1.05);
+            border-color: rgba(255, 255, 255, 0.3);
+            background: rgba(55, 65, 81, 0.7);
+        }
+
+        .mic-btn svg {
+            width: 32px;
+            height: 32px;
+            fill: currentColor;
+            transition: all 0.3s;
+        }
+
+        /* Recording Pulsing State */
+        .mic-btn.recording {
+            background: #ef4444;
+            border-color: rgba(255, 255, 255, 0.3);
+            animation: none;
+            box-shadow: 0 0 30px rgba(239, 68, 68, 0.5);
+        }
+
+        .mic-btn.recording:hover {
+            background: #dc2626;
+        }
+
+        .pulse-ring {
+            position: absolute;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 2px solid #ef4444;
+            opacity: 0;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .mic-btn.recording + .pulse-ring {
+            animation: pulse-ring-expand 2s infinite cubic-bezier(0.215, 0.610, 0.355, 1);
+        }
+
+        /* Thinking Spinner State */
+        .mic-btn.thinking {
+            background: rgba(13, 148, 136, 0.6);
+            border-color: rgba(13, 148, 136, 0.8);
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .spinner {
+            width: 34px;
+            height: 34px;
+            border: 3px solid rgba(255, 255, 255, 0.2);
+            border-top: 3px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        /* Control Assist Label */
+        .control-label {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-main);
+            letter-spacing: 0.3px;
+        }
+
+        .control-sublabel {
+            font-size: 0.75rem;
+            color: var(--color-reconnecting);
+            height: 16px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        /* Right Column (35% width) */
+        .side-analytics-panel {
+            width: 35%;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            background: rgba(10, 15, 25, 0.4);
+            overflow-y: auto;
+        }
+
+        .side-analytics-panel::-webkit-scrollbar {
+            width: 4px;
+        }
+        .side-analytics-panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 99px;
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-glass);
+            border-radius: 16px;
+            padding: 1.25rem;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+        }
+
+        .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        /* Latency Panel Elements */
+        .latency-container {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            position: relative;
+            padding-bottom: 0.5rem;
+        }
+
+        .latency-row {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+            position: relative;
+            z-index: 2;
+        }
+
+        .latency-row-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .bar-container {
+            width: 100%;
+            height: 10px;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 99px;
+            overflow: hidden;
+            border: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .bar-fill {
+            height: 100%;
+            border-radius: 99px;
+            width: 0%;
+            transition: width 0.8s cubic-bezier(0.19, 1, 0.22, 1);
+        }
+
+        .bar-fill.stt { background-color: var(--color-stt); }
+        .bar-fill.llm { background-color: var(--color-llm); }
+        .bar-fill.tts { background-color: var(--color-tts); }
+
+        /* Dotted red vertical target limit marker */
+        .target-line-container {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 45%; /* Representing 450ms on a 1000ms scale */
+            width: 1px;
+            border-left: 1px dotted rgba(239, 68, 68, 0.6);
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .target-label {
+            position: absolute;
+            top: -16px;
+            left: -20px;
+            font-size: 0.65rem;
+            color: #ef4444;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .total-row {
+            margin-top: 0.5rem;
+            padding-top: 0.75rem;
+            border-top: 1px solid rgba(255, 255, 255, 0.06);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 800;
+            font-size: 1.1rem;
+        }
+
+        .total-value {
+            transition: color 0.3s;
+        }
+
+        .total-value.under-limit {
+            color: var(--color-connected);
+        }
+
+        .total-value.over-limit {
+            color: var(--color-disconnected);
+        }
+
+        /* Monospace Reasoning Trace Panel */
+        .trace-box {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.8rem;
+            background: #090d16;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 0.85rem;
+            color: #a5b4fc;
+            overflow-x: auto;
+            max-height: 250px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .trace-item {
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+        }
+
+        .trace-label {
+            color: #38bdf8;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+        }
+
+        .trace-val {
+            color: var(--text-main);
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+
+        /* Outbound Campaigns Panel */
+        .outbound-form {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        .form-control {
+            background: rgba(17, 24, 39, 0.8);
+            border: 1px solid var(--border-glass);
+            border-radius: 8px;
+            color: white;
+            padding: 0.6rem 0.8rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+            width: 100%;
+            outline: none;
+            transition: all 0.3s;
+        }
+
+        .form-control:focus {
+            border-color: rgba(13, 148, 136, 0.8);
+            box-shadow: 0 0 0 2px rgba(13, 148, 136, 0.2);
+        }
+
+        select.form-control {
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg fill='white' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+            background-repeat: no-repeat;
+            background-position-x: calc(100% - 10px);
+            background-position-y: 50%;
+        }
+
+        .btn-trigger {
+            background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%);
+            border: none;
+            color: white;
+            padding: 0.75rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2);
+        }
+
+        .btn-trigger:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(13, 148, 136, 0.3);
+            background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%);
+        }
+
+        .btn-trigger:active {
+            transform: translateY(1px);
+        }
+
+        .trigger-status {
+            font-family: 'Fira Code', monospace;
+            font-size: 0.75rem;
+            padding: 0.5rem;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            color: #34d399;
+            word-break: break-all;
+            border: 1px solid rgba(52, 211, 153, 0.15);
+            max-height: 80px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        /* Animations */
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+
+        @keyframes pulse-ring-expand {
+            0% {
+                transform: scale(0.95);
+                opacity: 0.8;
+            }
+            50% {
+                opacity: 0.4;
+            }
+            100% {
+                transform: scale(1.6);
+                opacity: 0;
+            }
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Dynamic Visualizer Wave during speaking */
+        .voice-wave {
+            display: none;
+            align-items: center;
+            gap: 3px;
+            height: 20px;
+        }
+        
+        .voice-wave.active {
+            display: flex;
+        }
+
+        .voice-wave-bar {
+            width: 3px;
+            height: 100%;
+            background-color: #ef4444;
+            border-radius: 3px;
+            animation: dance 1s ease-in-out infinite alternate;
+        }
+
+        .voice-wave-bar:nth-child(1) { height: 40%; animation-delay: 0.1s; }
+        .voice-wave-bar:nth-child(2) { height: 80%; animation-delay: 0.3s; }
+        .voice-wave-bar:nth-child(3) { height: 50%; animation-delay: 0.2s; }
+        .voice-wave-bar:nth-child(4) { height: 95%; animation-delay: 0.5s; }
+        .voice-wave-bar:nth-child(5) { height: 60%; animation-delay: 0.4s; }
+
+        @keyframes dance {
+            0% { transform: scaleY(0.3); }
+            100% { transform: scaleY(1.0); }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Top Navigation Header -->
+    <nav>
+        <div class="logo">2Care.ai Voice Console</div>
+        <div class="session-info" id="session-info-badge">Session ID: Generating...</div>
+    </nav>
+
+    <!-- App Main Body Layout -->
+    <div class="app-container">
+        
+        <!-- Left Chat & Mic Column (65%) -->
+        <div class="main-chat-panel">
+            
+            <div class="chat-header">
+                <div class="chat-title">
+                    <span class="status-dot" id="ws-status-dot"></span>
+                    <span class="status-text" id="ws-status-text">Connecting to gateway...</span>
+                </div>
+                <!-- Dynamic speaking indicator -->
+                <div class="voice-wave" id="mic-voice-wave">
+                    <div class="voice-wave-bar"></div>
+                    <div class="voice-wave-bar"></div>
+                    <div class="voice-wave-bar"></div>
+                    <div class="voice-wave-bar"></div>
+                    <div class="voice-wave-bar"></div>
+                </div>
+            </div>
+
+            <!-- Chat History Thread -->
+            <div class="chat-history" id="chat-history-thread">
+                <!-- Welcome Agent Greeting Bubble -->
+                <div class="message-row agent">
+                    <div class="bubble">
+                        <span class="lang-badge">🇬🇧 EN</span>
+                        Hello! I am your clinical appointment assistant. Click the microphone below to check availability or book an appointment.
+                    </div>
+                </div>
+            </div>
+
+            <!-- Controls Area at Bottom -->
+            <div class="controls-container">
+                <div class="mic-btn-wrapper">
+                    <button class="mic-btn" id="mic-action-btn" title="Click to talk">
+                        <!-- Microphone SVG -->
+                        <svg id="mic-svg-icon" viewBox="0 0 24 24">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                        <!-- Loader Spinner -->
+                        <div class="spinner" id="thinking-loader" style="display: none;"></div>
+                    </button>
+                    <div class="pulse-ring"></div>
+                </div>
+                
+                <span class="control-label" id="mic-control-label">Click to Speak</span>
+                <span class="control-sublabel" id="mic-control-sublabel"></span>
+            </div>
+
+        </div>
+
+        <!-- Right Side Panel (35%) -->
+        <div class="side-analytics-panel">
+            
+            <!-- Latency Profile Dashboard -->
+            <div class="card">
+                <div class="card-title">Latency Breakdown</div>
+                
+                <div class="latency-container">
+                    <!-- Dotted target bar mark -->
+                    <div class="target-line-container">
+                        <div class="target-label">Target (450ms)</div>
+                    </div>
+
+                    <!-- STT Row -->
+                    <div class="latency-row">
+                        <div class="latency-row-meta">
+                            <span>Speech-to-Text (STT)</span>
+                            <span id="stt-val">0ms</span>
+                        </div>
+                        <div class="bar-container">
+                            <div class="bar-fill stt" id="stt-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- LLM Agent Row -->
+                    <div class="latency-row">
+                        <div class="latency-row-meta">
+                            <span>Clinical Reasoning (LLM)</span>
+                            <span id="llm-val">0ms</span>
+                        </div>
+                        <div class="bar-container">
+                            <div class="bar-fill llm" id="llm-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- TTS Row -->
+                    <div class="latency-row">
+                        <div class="latency-row-meta">
+                            <span>Voice Generation (TTS)</span>
+                            <span id="tts-val">0ms</span>
+                        </div>
+                        <div class="bar-container">
+                            <div class="bar-fill tts" id="tts-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- Combined Row -->
+                    <div class="total-row">
+                        <span>Total Pipeline Latency</span>
+                        <span class="total-value" id="total-val">0ms</span>
+                    </div>
+
+                </div>
+            </div>
+
+            <!-- Agent Trace Log -->
+            <div class="card">
+                <div class="card-title">Reasoning Trace</div>
+                <div class="trace-box">
+                    <div class="trace-item">
+                        <div class="trace-label">Detected Intent</div>
+                        <div class="trace-val" id="trace-intent">None</div>
+                    </div>
+                    <div class="trace-item">
+                        <div class="trace-label">Tool Called</div>
+                        <div class="trace-val" id="trace-tool-called">None</div>
+                    </div>
+                    <div class="trace-item">
+                        <div class="trace-label">Tool Result</div>
+                        <div class="trace-val" id="trace-tool-result">None</div>
+                    </div>
+                    <div class="trace-item">
+                        <div class="trace-label">Response Generated</div>
+                        <div class="trace-val" id="trace-response">None</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Outbound Campaigns Test -->
+            <div class="card">
+                <div class="card-title">Outbound Reminder Trigger</div>
+                <div class="outbound-form">
+                    <div class="form-group">
+                        <label for="patient-phone">Patient Phone</label>
+                        <input type="text" class="form-control" id="patient-phone" value="+919876543210" placeholder="+91xxxxxxxxxx">
+                    </div>
+                    <div class="form-group">
+                        <label for="campaign-type">Campaign Type</label>
+                        <select class="form-control" id="campaign-type">
+                            <option value="reminder">Outbound Reminder Campaign</option>
+                            <option value="followup">Outbound Follow-up Campaign</option>
+                        </select>
+                    </div>
+                    <button class="btn-trigger" id="btn-trigger-campaign">Trigger Campaign Run</button>
+                    
+                    <div class="trigger-status" id="trigger-status-box"></div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <!-- Javascript Logical Pipeline -->
+    <script>
+        // State management
+        const state = {
+            sessionId: crypto.randomUUID(),
+            patientPhone: "+919876543210",
+            ws: null,
+            isConnected: false,
+            isRecording: false,
+            mediaRecorder: null,
+            audioContext: null,
+            analyser: null,
+            silenceTimer: null,
+            reconnectTimer: null,
+            rmsInterval: null
+        };
+
+        // UI DOM references
+        const Doms = {
+            sessionInfo: document.getElementById('session-info-badge'),
+            wsDot: document.getElementById('ws-status-dot'),
+            wsText: document.getElementById('ws-status-text'),
+            chatThread: document.getElementById('chat-history-thread'),
+            micBtn: document.getElementById('mic-action-btn'),
+            micSvg: document.getElementById('mic-svg-icon'),
+            loader: document.getElementById('thinking-loader'),
+            micLabel: document.getElementById('mic-control-label'),
+            micSublabel: document.getElementById('mic-control-sublabel'),
+            voiceWave: document.getElementById('mic-voice-wave'),
+            
+            // Latency meters
+            sttVal: document.getElementById('stt-val'),
+            sttBar: document.getElementById('stt-bar'),
+            llmVal: document.getElementById('llm-val'),
+            llmBar: document.getElementById('llm-bar'),
+            ttsVal: document.getElementById('tts-val'),
+            ttsBar: document.getElementById('tts-bar'),
+            totalVal: document.getElementById('total-val'),
+            
+            // Reasoning
+            traceIntent: document.getElementById('trace-intent'),
+            traceTool: document.getElementById('trace-tool-called'),
+            traceResult: document.getElementById('trace-tool-result'),
+            traceResponse: document.getElementById('trace-response'),
+            
+            // Trigger outbound
+            phoneInput: document.getElementById('patient-phone'),
+            campaignSelect: document.getElementById('campaign-type'),
+            triggerBtn: document.getElementById('btn-trigger-campaign'),
+            triggerStatus: document.getElementById('trigger-status-box')
+        };
+
+        // Display Session ID on Load
+        Doms.sessionInfo.innerText = `Session ID: ${state.sessionId}`;
+
+        // Language mapper emojis
+        const langEmojis = {
+            en: '🇬🇧 EN',
+            hi: '🇮🇳 HI',
+            ta: '🇮🇳 TA',
+            te: '🇮🇳 TE'
+        };
+
+        // Initialize WebSocket Connection
+        function connectWebSocket() {
+            clearTimeout(state.reconnectTimer);
+            
+            Doms.wsText.innerText = "Connecting to gateway...";
+            Doms.wsDot.className = "status-dot reconnecting";
+            
+            const wsUrl = `ws://localhost:3000?session_id=${state.sessionId}&patient_phone=${encodeURIComponent(state.patientPhone)}`;
+            console.log(`[WS] Connecting to: ${wsUrl}`);
+            
+            state.ws = new WebSocket(wsUrl);
+            
+            state.ws.onopen = () => {
+                console.log("[WS] Connected successfully to WebSocket gateway.");
+                state.isConnected = true;
+                Doms.wsDot.className = "status-dot connected";
+                Doms.wsText.innerText = "Gateway Connected (Ready)";
+            };
+            
+            state.ws.onmessage = async (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log("[WS] Received payload from gateway:", data);
+                    
+                    if (data.type === 'voice_response') {
+                        handleVoiceResponse(data);
+                    } else if (data.type === 'error') {
+                        appendChatBubble('agent', `⚠️ Error: ${data.message}`, 'en');
+                        resetControlsState();
+                    }
+                } catch (e) {
+                    console.error("[WS] Failed to parse WebSocket frame:", e);
+                }
+            };
+            
+            state.ws.onclose = () => {
+                console.warn("[WS] Connection lost. Attempting reconnect in 3s...");
+                state.isConnected = false;
+                Doms.wsDot.className = "status-dot reconnecting";
+                Doms.wsText.innerText = "Reconnecting to gateway...";
+                
+                // Triggers automatic reconnect loops
+                state.reconnectTimer = setTimeout(connectWebSocket, 3000);
+                resetControlsState();
+            };
+            
+            state.ws.onerror = (err) => {
+                console.error("[WS] WebSocket connection error:", err);
+                state.ws.close();
+            };
+        }
+
+        // Send raw 16-bit PCM chunks (pcm_s16le) at 16kHz sample rate as they arrive
+        async function startRecording() {
+            if (!state.isConnected) {
+                alert("WebSocket is not connected! Waiting for connection...");
+                return;
+            }
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                state.mediaStream = stream;
+                
+                state.isRecording = true;
+                Doms.micBtn.className = "mic-btn recording";
+                Doms.micSvg.style.display = "none";
+                Doms.micLabel.innerText = "Listening...";
+                Doms.micSublabel.innerText = "";
+                Doms.voiceWave.className = "voice-wave active";
+
+                // Initialize AudioContext at exactly 16000Hz so the browser automatically downsamples for us
+                state.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                state.analyser = state.audioContext.createAnalyser();
+                state.analyser.fftSize = 512;
+                
+                state.mediaSource = state.audioContext.createMediaStreamSource(stream);
+                state.mediaSource.connect(state.analyser);
+                
+                const bufferLength = state.analyser.fftSize;
+                const dataArray = new Float32Array(bufferLength);
+                
+                // RMS inactivity monitor (silence check every 50ms)
+                let silenceDuration = 0;
+                state.rmsInterval = setInterval(() => {
+                    if (!state.isRecording) return;
+                    
+                    state.analyser.getFloatTimeDomainData(dataArray);
+                    let sumSquares = 0.0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        sumSquares += dataArray[i] * dataArray[i];
+                    }
+                    let rms = Math.sqrt(sumSquares / dataArray.length);
+                    
+                    if (rms < 0.008) {
+                        silenceDuration += 50;
+                        if (silenceDuration >= 800) {
+                            console.log(`[VAD] Silence detected for 800ms (RMS: ${rms.toFixed(5)}). Auto-triggering end of speech.`);
+                            Doms.micSublabel.innerText = "Auto-detected silence";
+                            stopRecording();
+                        }
+                    } else {
+                        silenceDuration = 0; // Reset counter
+                        Doms.micSublabel.innerText = "";
+                    }
+                }, 50);
+
+                // Create a ScriptProcessorNode with bufferSize = 4096, 1 input channel, 1 output channel
+                const bufferSize = 4096;
+                state.recorderNode = state.audioContext.createScriptProcessor(bufferSize, 1, 1);
+                
+                state.recorderNode.onaudioprocess = (event) => {
+                    if (!state.isRecording) return;
+                    
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    
+                    // Convert float32 PCM [-1.0, 1.0] to signed 16-bit PCM [pcm_s16le]
+                    const pcmBuffer = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        let s = Math.max(-1, Math.min(1, inputData[i]));
+                        pcmBuffer[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+                    
+                    // Send binary PCM chunk over WS
+                    if (state.isConnected && state.ws && state.ws.readyState === WebSocket.OPEN) {
+                        state.ws.send(pcmBuffer.buffer);
+                    }
+                };
+                
+                state.mediaSource.connect(state.recorderNode);
+                state.recorderNode.connect(state.audioContext.destination);
+                
+                console.log("[Audio] Streaming raw 16kHz PCM audio packets...");
+            } catch (err) {
+                console.error("[Audio] Microphone access denied or failed:", err);
+                alert("Failed to acquire microphone access.");
+                resetControlsState();
+            }
+        }
+
+        // Stop recording cleanly and request processing
+        function stopRecording() {
+            if (!state.isRecording) return;
+            state.isRecording = false;
+
+            // Stop streams, nodes and timers
+            clearInterval(state.rmsInterval);
+            if (state.recorderNode) {
+                state.recorderNode.disconnect();
+                state.recorderNode = null;
+            }
+            if (state.mediaSource) {
+                state.mediaSource.disconnect();
+                state.mediaSource = null;
+            }
+            if (state.mediaStream) {
+                state.mediaStream.getTracks().forEach(track => track.stop());
+                state.mediaStream = null;
+            }
+            if (state.audioContext) {
+                state.audioContext.close();
+                state.audioContext = null;
+            }
+
+            // Transition UI to thinking
+            Doms.micBtn.className = "mic-btn thinking";
+            Doms.loader.style.display = "block";
+            Doms.micLabel.innerText = "Thinking...";
+            Doms.voiceWave.className = "voice-wave";
+
+            // Signal explicit end of speech control frame to gateway
+            if (state.isConnected) {
+                console.log("[WS] Dispatched end_of_speech control packet.");
+                state.ws.send(JSON.stringify({
+                    type: "end_of_speech",
+                    session_id: state.sessionId,
+                    patient_phone: state.patientPhone
+                }));
+            }
+        }
+
+        // Processes API Response
+        function handleVoiceResponse(data) {
+            resetControlsState();
+            
+            // 1. Render patient text and agent reply bubbles
+            if (data.trace && data.trace.user_said) {
+                appendChatBubble('patient', data.trace.user_said, data.detected_language);
+            }
+            appendChatBubble('agent', data.response_text, data.detected_language, data.latency);
+            
+            // 2. Play base64 audio via Web Audio API
+            if (data.audio_base64) {
+                playBase64Audio(data.audio_base64);
+            }
+
+            // 3. Render Latency Panel Metrics
+            renderLatencyProfile(data.latency);
+
+            // 4. Render Reasoning Traces Panel
+            renderReasoningTrace(data.trace, data.response_text);
+        }
+
+        // Audio Decode Base64 -> play via Web Audio API
+        async function playBase64Audio(base64Data) {
+            try {
+                const binaryString = atob(base64Data);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                
+                const playCtx = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await playCtx.decodeAudioData(bytes.buffer);
+                
+                const source = playCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(playCtx.destination);
+                source.start(0);
+                console.log("[Audio] Audio playback completed via Web Audio API.");
+            } catch (err) {
+                console.error("[Audio] Web Audio decode playback failed:", err);
+            }
+        }
+
+        // Latency profiling updates
+        function renderLatencyProfile(latency) {
+            if (!latency) return;
+            const stt = latency.stt_ms || 0;
+            const llm = latency.llm_ms || 0;
+            const tts = latency.tts_ms || 0;
+            const total = latency.total_ms || (stt + llm + tts);
+
+            Doms.sttVal.innerText = `${stt}ms`;
+            Doms.llmVal.innerText = `${llm}ms`;
+            Doms.ttsVal.innerText = `${tts}ms`;
+            Doms.totalVal.innerText = `${total}ms`;
+
+            // Max timeline base of 1000ms for percentage conversion
+            const getPercent = (ms) => Math.min((ms / 1000) * 100, 100);
+            
+            Doms.sttBar.style.width = `${getPercent(stt)}%`;
+            Doms.llmBar.style.width = `${getPercent(llm)}%`;
+            Doms.ttsBar.style.width = `${getPercent(tts)}%`;
+
+            // Target limit checks (450ms target validation)
+            if (total <= 450) {
+                Doms.totalVal.className = "total-value under-limit";
+            } else {
+                Doms.totalVal.className = "total-value over-limit";
+            }
+        }
+
+        // Trace updates
+        function renderReasoningTrace(trace, responseText) {
+            Doms.traceIntent.innerText = (trace && trace.intent_detected) ? trace.intent_detected : "reminder";
+            Doms.traceTool.innerText = (trace && trace.tool_called) ? trace.tool_called : "None";
+            Doms.traceResult.innerText = (trace && trace.tool_returned) ? JSON.stringify(trace.tool_returned, null, 2) : "None";
+            Doms.traceResponse.innerText = responseText || "None";
+        }
+
+        // Render Conversation Bubble
+        function appendChatBubble(role, text, lang, latency = null) {
+            const row = document.createElement('div');
+            row.className = `message-row ${role}`;
+            
+            const emoji = langEmojis[lang] || '🇬🇧 EN';
+            
+            let latencyText = '';
+            if (role === 'agent' && latency) {
+                latencyText = `
+                    <div class="metadata-line">
+                        STT ${latency.stt_ms || 0}ms &middot; LLM ${latency.llm_ms || 0}ms &middot; TTS ${latency.tts_ms || 0}ms &middot; Total ${latency.total_ms || 0}ms
+                    </div>
+                `;
+            }
+
+            row.innerHTML = `
+                <div class="bubble">
+                    <span class="lang-badge">${emoji}</span>
+                    ${text}
+                </div>
+                ${latencyText}
+            `;
+            
+            Doms.chatThread.appendChild(row);
+            Doms.chatThread.scrollTop = Doms.chatThread.scrollHeight;
+        }
+
+        // Reset Controls to Idle State
+        function resetControlsState() {
+            state.isRecording = false;
+            Doms.micBtn.className = "mic-btn";
+            Doms.micSvg.style.display = "block";
+            Doms.loader.style.display = "none";
+            Doms.micLabel.innerText = "Click to Speak";
+            Doms.voiceWave.className = "voice-wave";
+        }
+
+        // Toggle record click handler
+        Doms.micBtn.addEventListener('click', () => {
+            if (state.isRecording) {
+                Doms.micSublabel.innerText = "";
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        // Trigger manual Outbound campaign run
+        Doms.triggerBtn.addEventListener('click', async () => {
+            const phone = Doms.phoneInput.value.trim();
+            const campaignType = Doms.campaignSelect.value;
+            
+            if (!phone) {
+                alert("Please enter a patient phone number.");
+                return;
+            }
+
+            Doms.triggerBtn.disabled = true;
+            Doms.triggerBtn.innerText = "Triggering...";
+            Doms.triggerStatus.style.display = "block";
+            Doms.triggerStatus.innerText = "Executing campaign run...";
+            Doms.triggerStatus.style.color = "#f59e0b";
+
+            try {
+                const response = await fetch('http://localhost:8000/campaigns/trigger', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        patient_phone: phone,
+                        campaign_type: campaignType
+                    })
+                });
+
+                const data = await response.json();
+                Doms.triggerBtn.disabled = false;
+                Doms.triggerBtn.innerText = "Trigger Campaign Run";
+
+                if (response.ok) {
+                    Doms.triggerStatus.innerText = JSON.stringify(data, null, 2);
+                    Doms.triggerStatus.style.color = "#34d399";
+                    
+                    // After successfully launching a campaign, let's fetch the traces to populate the trace panels automatically!
+                    setTimeout(async () => {
+                        try {
+                            const tracesRes = await fetch('http://localhost:8000/traces');
+                            if (tracesRes.ok) {
+                                const traces = await tracesRes.json();
+                                if (traces && traces.length > 0) {
+                                    const lastTrace = traces[0];
+                                    renderReasoningTrace(lastTrace, lastTrace.agent_said);
+                                    
+                                    // Append it to conversation bubble as an outbound visual summary
+                                    appendChatBubble('agent', `[Outbound Reminder Campaign Call Successful]\n${lastTrace.agent_said}`, lastTrace.language || 'en');
+                                }
+                            }
+                        } catch (err) {
+                            console.error("Failed to load trace post campaign trigger:", err);
+                        }
+                    }, 2000);
+                } else {
+                    Doms.triggerStatus.innerText = `Error: ${data.detail || 'Internal error'}`;
+                    Doms.triggerStatus.style.color = "#ef4444";
+                }
+            } catch (err) {
+                console.error("Campaign POST failed:", err);
+                Doms.triggerBtn.disabled = false;
+                Doms.triggerBtn.innerText = "Trigger Campaign Run";
+                Doms.triggerStatus.innerText = `Connection Failed: ${err.message}`;
+                Doms.triggerStatus.style.color = "#ef4444";
+            }
+        });
+
+        // Initialize connection on load
+        connectWebSocket();
+    </script>
+</body>
+</html>

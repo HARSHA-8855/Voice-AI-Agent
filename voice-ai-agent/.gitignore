@@ -1,0 +1,40 @@
+# Environment Files
+.env
+.env.*
+backend/.env
+backend/.env.*
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+.toast
+.lucid
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Node.js Dependencies & Builds
+node_modules/
+gateway/node_modules/
+gateway/dist/
+package-lock.json
+
+# Databases & Cache files
+*.db
+*.sqlite
+*.sqlite3
+dump.rdb
+backend/celerybeat-schedule*
+
+# OS Files
+.DS_Store
+Thumbs.db

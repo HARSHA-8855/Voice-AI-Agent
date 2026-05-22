@@ -8,7 +8,5 @@ sarvamai
 websockets
 groq
 langdetect
-webrtcvad
-python-dotenv
-pytest
-pytest-asyncio
+alembic
+httpx

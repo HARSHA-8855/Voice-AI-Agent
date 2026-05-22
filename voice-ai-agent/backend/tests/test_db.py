@@ -16,12 +16,17 @@ async def test_db_models():
         
     async with async_session() as session:
         # Create a patient
-        patient = Patient(name="Test Patient")
+        patient = Patient(name="Test Patient", phone="+1234567890", preferred_language="en")
         session.add(patient)
         await session.commit()
         
         # Create an appointment
-        appointment = Appointment(patient_id=patient.id, appointment_time=datetime.now())
+        appointment = Appointment(
+            patient_id=patient.id,
+            doctor_type="General Physician",
+            date=datetime.now().date(),
+            time=datetime.now().time()
+        )
         session.add(appointment)
         await session.commit()
         
@@ -29,6 +34,7 @@ async def test_db_models():
         result = await session.execute(select(Patient).where(Patient.name == "Test Patient"))
         db_patient = result.scalar_one()
         assert db_patient.name == "Test Patient"
+        assert db_patient.phone == "+1234567890"
         assert db_patient.id is not None
         
     await engine.dispose()

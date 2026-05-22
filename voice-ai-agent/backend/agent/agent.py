@@ -14,7 +14,7 @@ class ClinicalAgent:
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or os.getenv("GROQ_API_KEY")
         self.client = AsyncGroq(api_key=self.api_key)
-        self.model = "llama-3.1-70b-versatile"
+        self.model = "llama-3.1-8b-instant"
         
         # Tool Schemas for Groq
         self.tools = [
@@ -52,7 +52,7 @@ class ClinicalAgent:
                             "date": {"type": "string", "description": "YYYY-MM-DD"},
                             "time": {"type": "string", "description": "HH:MM"}
                         },
-                        "required": ["patient_id", "doctor_type", "date", "time"]
+                        "required": ["doctor_type", "date", "time"]
                     }
                 }
             },
@@ -64,7 +64,7 @@ class ClinicalAgent:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "appointment_id": {"type": "string"}
+                            "appointment_id": {"type": "integer"}
                         },
                         "required": ["appointment_id"]
                     }
@@ -78,7 +78,7 @@ class ClinicalAgent:
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "appointment_id": {"type": "string"},
+                            "appointment_id": {"type": "integer"},
                             "new_date": {"type": "string", "description": "YYYY-MM-DD"},
                             "new_time": {"type": "string", "description": "HH:MM"}
                         },
@@ -89,14 +89,20 @@ class ClinicalAgent:
         ]
 
     def _build_system_prompt(self, language: str, history: Dict, session: Dict) -> str:
+        from agent.prompts import get_system_prompt
         today = datetime.now().strftime("%Y-%m-%d")
-        prompt = f"""You are a healthcare appointment assistant for an Indian clinic.
+        base_prompt = get_system_prompt()
+        patient_id = history.get("id") or ""
+        prompt = f"""{base_prompt}
 Current language: {language}. Respond ONLY in this language.
-Patient history: {json.dumps(history)}
+Patient info and history: {json.dumps(history)}
 Current session state: {json.dumps(session)}
 Today's date: {today}
 Available actions: book, cancel, reschedule, check availability.
-Always confirm details before booking. Suggest alternatives on conflict."""
+Always confirm details before booking. Suggest alternatives on conflict.
+
+When calling book_appointment, always pass the patient's ID '{patient_id}' to the patient_id parameter.
+When cancelling or rescheduling, identify the appointment ID (appointment_id) from the patient's history or previous turns."""
         return prompt
 
     async def process_request(
@@ -113,10 +119,14 @@ Always confirm details before booking. Suggest alternatives on conflict."""
         
         system_prompt = self._build_system_prompt(detected_language, patient_history, session_context)
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text}
-        ]
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Load and append conversation turns from session_context
+        for msg in session_context.get("messages", []):
+            if msg.get("role") in ["user", "assistant"]:
+                messages.append({"role": msg["role"], "content": msg["content"]})
+                
+        messages.append({"role": "user", "content": user_text})
 
         try:
             # 1. First LLM call to see if tools are needed
@@ -178,6 +188,123 @@ Always confirm details before booking. Suggest alternatives on conflict."""
                 "tool_result": {"error": str(e)},
                 "latency_ms": int((time.perf_counter() - start_time) * 1000)
             }
+
+async def run_agent(
+    user_text: str,
+    session_context: Dict[str, Any],
+    patient_history: Dict[str, Any],
+    detected_language: str = "English",
+    db: Optional[Any] = None
+) -> Dict[str, Any]:
+    """
+    Run the ClinicalAgent for a single turn, executing any requested tools 
+    using the provided db session, and returning the agent's final text and tool actions.
+    """
+    agent = ClinicalAgent()
+    agent_res = await agent.process_request(
+        user_text=user_text,
+        session_context=session_context,
+        patient_history=patient_history,
+        detected_language=detected_language
+    )
+    
+    tool_called = agent_res.get("tool_called")
+    tool_args = agent_res.get("tool_result", {}).get("args", {}) if agent_res.get("tool_result") else {}
+    tool_exec_result = None
+    response_text = agent_res.get("response_text", "")
+    
+    if tool_called and db is not None:
+        from agent.tools import (
+            check_availability, 
+            book_appointment, 
+            cancel_appointment, 
+            reschedule_appointment, 
+            ClinicalClinicError, 
+            AppointmentConflictError
+        )
+        try:
+            if tool_called == "check_availability":
+                tool_exec_result = await check_availability(
+                    db,
+                    doctor_type=tool_args.get("doctor_type"),
+                    date_str=tool_args.get("date")
+                )
+            elif tool_called == "book_appointment":
+                patient_id = int(patient_history.get("id") or session_context.get("appointment_id") or 0)
+                tool_exec_result = await book_appointment(
+                    db,
+                    patient_id=patient_id,
+                    doctor_type=tool_args.get("doctor_type"),
+                    date_str=tool_args.get("date"),
+                    time_str=tool_args.get("time")
+                )
+            elif tool_called == "cancel_appointment":
+                appt_id = int(tool_args.get("appointment_id"))
+                patient_id = int(patient_history.get("id") or session_context.get("appointment_id") or 0)
+                tool_exec_result = await cancel_appointment(
+                    db,
+                    appointment_id=appt_id,
+                    patient_id=patient_id
+                )
+            elif tool_called == "reschedule_appointment":
+                appt_id = int(tool_args.get("appointment_id"))
+                patient_id = int(patient_history.get("id") or session_context.get("appointment_id") or 0)
+                tool_exec_result = await reschedule_appointment(
+                    db,
+                    appointment_id=appt_id,
+                    patient_id=patient_id,
+                    new_date_str=tool_args.get("new_date"),
+                    new_time_str=tool_args.get("new_time")
+                )
+        except AppointmentConflictError as e:
+            tool_exec_result = {
+                "status": "error",
+                "error_type": "conflict",
+                "message": str(e),
+                "alternatives": e.alternatives
+            }
+        except ClinicalClinicError as e:
+            tool_exec_result = {
+                "status": "error",
+                "message": str(e)
+            }
+        except Exception as e:
+            tool_exec_result = {
+                "status": "error",
+                "message": f"An unexpected error occurred during scheduling: {str(e)}"
+            }
+
+        # Secondary reasoning pass
+        if tool_exec_result:
+            try:
+                messages = [
+                    {"role": "system", "content": agent._build_system_prompt(detected_language, patient_history, session_context)},
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": None, "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": tool_called, "arguments": json.dumps(tool_args)}}
+                    ]},
+                    {"role": "tool", "tool_call_id": "call_1", "name": tool_called, "content": json.dumps(tool_exec_result)}
+                ]
+                
+                second_res = await agent.client.chat.completions.create(
+                    model=agent.model,
+                    messages=messages,
+                    temperature=0.2
+                )
+                response_text = second_res.choices[0].message.content or ""
+            except Exception as e:
+                logger.error(f"Secondary LLM generation failed: {e}")
+                if tool_exec_result.get("status") == "success":
+                    response_text = tool_exec_result.get("confirmation_message") or "Done."
+                else:
+                    response_text = tool_exec_result.get("message") or "Sorry, an error occurred."
+
+    return {
+        "response_text": response_text,
+        "tool_called": tool_called,
+        "tool_result": tool_exec_result or agent_res.get("tool_result"),
+        "latency_ms": agent_res.get("latency_ms", 0)
+    }
 
 # Simple test function
 if __name__ == "__main__":
