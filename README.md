@@ -9,7 +9,7 @@ A production-grade voice AI agent for digital healthcare. Patients speak in Engl
 
 ```bash
 # 1. Clone and enter the project
-git clone <your-repo-url>
+git clone https://github.com/HARSHA-8855/Voice-AI-Agent
 cd voice-ai-agent
 
 # 2. Copy environment variables
