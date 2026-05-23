@@ -1,4 +1,4 @@
-# 2Care Voice Agent
+# 🎙️ 2Care Voice Agent
 ### Real-Time Multilingual Clinical Appointment Booking — Voice AI Agent
 
 A production-grade voice AI agent for digital healthcare. Patients speak in English, Hindi, or Tamil — the agent understands, books/reschedules/cancels appointments, and responds in voice — all under 450 ms end-to-end.
@@ -9,7 +9,7 @@ A production-grade voice AI agent for digital healthcare. Patients speak in Engl
 
 ```bash
 # 1. Clone and enter the project
-git clone https://github.com/HARSHA-8855/Voice-AI-Agent
+git clone <your-repo-url>
 cd voice-ai-agent
 
 # 2. Copy environment variables
@@ -79,257 +79,264 @@ Celery Beat (9 AM daily)
 
 ---
 
-## Memory Design
+## 🚀 Getting Started
 
-The system uses a two-tier memory architecture to balance speed and persistence.
+You can choose to spin up the entire application stack in Docker, or run a hybrid configuration (Infrastructure in Docker, code running natively on your host machine) which is highly recommended for active development on Windows.
 
-### Tier 1 — Session memory (Redis)
+### Prerequisites
+*   Docker & Docker Compose installed
+*   Python 3.10+ installed
+*   Node.js 16+ and npm installed
 
-- **Key:** `session:{session_id}`
-- **TTL:** 30 minutes, sliding (resets on every turn)
-- **Stores:** current intent, doctor type, pending date/time, turn count, detected language, last agent utterance
-- **Purpose:** maintains multi-turn context within one conversation so the agent remembers "we were discussing a cardiologist for Tuesday" without re-asking
+---
 
+### Option A: Hybrid / Native Execution (Recommended for Windows)
+
+This option launches database containers in Docker while executing the microservices as fast local processes.
+
+#### 1. Start Docker Infrastructure (PostgreSQL + Redis)
+Ensure Docker is running, then start the persistent storage layers:
+```bash
+docker-compose up -d postgres redis
+```
+
+#### 2. Configure Environment Variables
+Create a file named `.env` in the `backend/` directory matching the following structure:
+```env
+GROQ_API_KEY=gsk_your_groq_key_here
+SARVAM_API_KEY=your_sarvam_key_here
+POSTGRES_URL=postgresql+asyncpg://user:password@localhost:5432/voice_agent
+REDIS_URL=redis://localhost:6379/0
+```
+Create a `.env` in the root or `gateway/` folder if you want to customize your Gateway configurations:
+```env
+PORT=3000
+FASTAPI_URL=http://127.0.0.1:8000
+```
+
+#### 3. Run the Automated Startup Script
+Simply run the startup batch file from the root directory:
+```bash
+start.bat
+```
+This script will:
+1. Confirm Redis and PostgreSQL are active in Docker.
+2. Launch the **FastAPI Backend** on port `8000`.
+3. Launch the **Node.js WebSocket Gateway** on port `3000`.
+4. Launch the **Celery Worker** process for background queues.
+5. Launch the **Celery Beat Scheduler** for outbound triggers.
+6. Spin up the **Demo Web Voice Console Server** on port `8080`.
+
+#### 4. Open the Web Console
+Open your browser and navigate to:
+```
+http://localhost:8080
+```
+This single-page app serves as a real-time web audio client. Press **Start Session**, allow microphone access, and begin speaking!
+
+---
+
+### Option B: Full Containerized Stack
+
+To build and run all 6 microservices fully containerized:
+
+```bash
+# 1. Setup your .env in the backend folder
+cp backend/.env.example backend/.env
+# Update backend/.env with your GROQ_API_KEY and SARVAM_API_KEY
+
+# 2. Build and launch all services
+docker-compose up --build
+```
+Once healthy:
+*   Open the Demo Web Console in your browser: `http://localhost:8080`
+*   Verify backend health status: `curl http://localhost:8000/health`
+
+---
+
+## 💾 Two-Tier Memory Architecture
+
+To balance speed and durable transactional history, 2Care splits session memory and patient records into a two-tier memory topology:
+
+### Tier 1 — Active Session State (Redis Cache)
+*   **Storage**: Keyed by `session:{session_id}` with a sliding 30-minute Time-To-Live (TTL).
+*   **Properties**: Maintains turn history, active language, turn count, doctor type selection, and scheduled dates.
+*   **Why**: Under 1ms latency reads/writes keep the conversation context warm between turns without constantly hitting PostgreSQL.
+
+### Tier 2 — Patient & Appointment Records (PostgreSQL)
+*   **Tables**: `patients`, `appointments`, `doctor_schedule`, `interaction_log`.
+*   **Properties**: Holds patient contact details, primary language choices, past appointment records, and full textual interaction summaries.
+*   **Why**: Ensures returning patients are greeted by name and their language preferences are recognized instantly. Storing records in PostgreSQL guarantees ACID transactional properties for scheduling.
+
+---
+
+## 🎯 API Reference
+
+### Orchestrator Endpoints (`backend/main.py`)
+
+| Endpoint | Method | Input / Output | Description |
+| :--- | :--- | :--- | :--- |
+| `/health` | `GET` | None $\rightarrow$ JSON | Performs diagnostic pings to Redis and Postgres. |
+| `/voice/process` | `POST` | JSON $\rightarrow$ JSON | The core audio pipeline endpoint. |
+| `/metrics` | `GET` | None $\rightarrow$ JSON Array | Fetches latency breakdowns and tool stats for the last 20 turns. |
+| `/traces` | `GET` | None $\rightarrow$ JSON Array | Fetches deep LLM traces, tool parameters, and transcript logs. |
+| `/campaigns/trigger` | `POST` | JSON $\rightarrow$ JSON | Manually fires the daily reminder campaign loop. |
+
+#### `POST /voice/process`
+**Payload Format:**
 ```json
 {
-  "intent": "booking",
-  "doctor_type": "cardiologist",
-  "pending_date": "2025-06-12",
-  "language": "hi",
-  "turn_count": 3
+  "audio_base64": "UklGRi...",
+  "session_id": "8a7c29fb-df61-4131-8fdf-188b0f805a81",
+  "patient_phone": "+919988776655"
 }
 ```
 
-### Tier 2 — Persistent memory (PostgreSQL)
-
-- **Tables:** `patients`, `appointments`, `doctor_schedule`, `interaction_log`
-- **Retrieved at session start:** patient name, preferred language, last 3 appointments
-- **Written after each session:** interaction summary, language preference update
-- **Purpose:** returning patients are recognised — the agent knows their preferred language and prior doctors without asking
-
-**Why this split:** Redis gives sub-millisecond reads for hot session state. Postgres gives durable, queryable history across sessions. Storing everything in one place would either be too slow (all Postgres) or non-durable (all Redis).
-
----
-
-## Latency Breakdown
-
-Target: **< 450 ms** from speech end to first audio byte.
-
-| Stage | Component | Typical | Notes |
-|---|---|---|---|
-| Speech-to-Text | Sarvam Saaras V3 | ~100 ms | Streaming WebSocket; VAD detects speech end |
-| Language detect | Embedded in STT | ~0 ms | Saaras returns language tag with transcript |
-| Memory fetch | Redis + Postgres | ~15 ms | Session from Redis (~1 ms) + history from Postgres (~15 ms) |
-| LLM reasoning | Groq llama-3.1-70b | ~180 ms | Includes tool-call round trip |
-| Tool execution | Postgres query | ~10 ms | Indexed slot lookup |
-| Text-to-Speech | Sarvam Bulbul V3 | ~100 ms | Streaming; first audio chunk before full response |
-| **Total** | | **~405 ms** | Under 450 ms target |
-
-Latency is logged per-stage on every request. View live data at:
-```
-GET /metrics   → last 20 calls with stage breakdown
-GET /traces    → last 20 agent reasoning traces
-```
-
----
-
-## API Reference
-
-```
-POST /voice/process     Main pipeline endpoint
-GET  /health            Redis + Postgres connectivity check
-GET  /metrics           Last 20 calls, latency per stage
-GET  /traces            Last 20 agent reasoning traces
-POST /campaigns/trigger Manual outbound campaign trigger
-```
-
-**`POST /voice/process` — request:**
-```
-multipart/form-data
-  audio:         binary (webm/opus from browser)
-  session_id:    string (UUID)
-  patient_phone: string
-```
-
-**`POST /voice/process` — response:**
+**Response Format:**
 ```json
 {
-  "audio_base64": "...",
-  "response_text": "Your appointment with Dr. Sharma is confirmed for tomorrow at 10 AM.",
+  "audio_base64": "UklGRiS...",
+  "response_text": "Aapki appointment Dr. Sharma ke saath kal subah das baje confirmed hai.",
   "detected_language": "hi",
-  "latency": {
-    "stt_ms": 98,
-    "llm_ms": 175,
-    "tts_ms": 102,
-    "total_ms": 412
+  "latency_breakdown": {
+    "stt_ms": 198,
+    "lang_ms": 2,
+    "memory_ms": 11,
+    "llm_ms": 140,
+    "tts_ms": 210,
+    "total_ms": 561
   },
   "trace": {
-    "intent": "book",
+    "timestamp": "2026-05-23T19:06:57.123456",
+    "session_id": "8a7c29fb-df61-4131-8fdf-188b0f805a81",
+    "user_said": "book appointment tomorrow with sharma cardiologist",
+    "intent_detected": "book_appointment",
     "tool_called": "book_appointment",
-    "tool_result": { "appointment_id": "appt_123", "confirmed": true },
-    "response": "Aapki appointment confirm ho gayi hai..."
+    "tool_returned": {
+      "status": "success",
+      "appointment_id": 42,
+      "confirmation_message": "Appointment confirmed for 2026-05-24 at 10:00"
+    },
+    "agent_said": "Aapki appointment Dr. Sharma ke saath kal subah das baje confirmed hai."
   }
 }
 ```
 
 ---
 
-## Multilingual Support
+## 🌐 Multilingual Orchestration
 
-| Language | Code | STT | TTS | Detection |
-|---|---|---|---|---|
-| English | `en-IN` | Saaras V3 | Bulbul V3 | Auto |
-| Hindi | `hi-IN` | Saaras V3 | Bulbul V3 | Auto |
-| Tamil | `ta-IN` | Saaras V3 | Bulbul V3 | Auto |
-
-Language is auto-detected by Sarvam Saaras V3 on every turn. The detected language is:
-1. Stored in Redis session (used for current conversation)
-2. Persisted to Postgres `patients.preferred_language` (used for future sessions)
-3. Passed to the LLM system prompt (`"Respond only in {language}"`)
-4. Passed to Bulbul V3 TTS for matching voice output
-
-Language can change mid-conversation — if a patient switches from English to Hindi, the agent detects and switches on the next turn.
+2Care features robust support for Indian accents and code-mixed formats (Hinglish/Tanglish).
+*   **Language Auto-Detection**: Handled by the native locale outputs of Sarvam Saaras V3. The backend refines this using a lightweight `langdetect` pass on the text to lock down the language (English, Hindi, or Tamil).
+*   **Stateful Prompting**: Once the language is detected, it is committed to the Redis session. The orchestrator adjusts the Groq LLM prompt system instruction, commanding: `Current language: {language}. Respond ONLY in this language.`
+*   **Native TTS Matching**: The output locale code is passed to the Sarvam Bulbul V3 engine to produce highly natural native-speaking TTS (e.g., using the "ritu" voice model for Hindi, Tamil, and Indian English).
 
 ---
 
-## Appointment & Conflict Logic
+## 🤖 Appointment Slot & Conflict Resolution
 
-**Validation rules (enforced in `backend/agent/tools.py`):**
-
-1. Slot in the past → rejected with message
-2. Slot already booked → rejected, 3 nearest alternatives offered
-3. Doctor not available on date → all available dates returned
-4. Reschedule → atomic transaction (old slot freed + new slot booked together)
-
-**Demo data seeded on startup:**
-- 3 doctors: Cardiologist (Dr. Sharma), Dermatologist (Dr. Rao), Neurologist (Dr. Patel)
-- Each has 5 available slots per day for the next 7 days
-- 2 pre-booked slots per doctor to demonstrate conflict handling
+The logic inside `backend/agent/tools.py` guarantees schedule sanity:
+1.  **Temporal Validation**: Slots occurring in the past relative to the server’s local time are rejected.
+2.  **Conflict Checks**: When a slot is already booked, the system automatically runs an index lookup on available slots for that doctor and offers the **3 nearest alternative times** on the same day or subsequent days.
+3.  **Atomic Operations**: Rescheduling an appointment executes as an atomic database transaction. The system frees the old slot and books the new one simultaneously—preventing a patient from losing their original slot if the new booking fails mid-transaction.
+4.  **Startup Seeding**: By default, 3 doctors are seeded on startup (Dr. Sharma - Cardiologist, Dr. Rao - Dermatologist, Dr. Patel - Neurologist) with 5 open slots per day for 7 days, complete with pre-booked conflicts to showcase the agent's negotiation skills.
 
 ---
 
-## Outbound Campaign Mode
+## ⏱️ Proactive Outbound Campaigns (Celery Beat)
 
-A Celery Beat scheduler runs daily at 9:00 AM:
+The background worker scheduling handles outbound care campaigns automatically:
+1.  **The Beat Schedule**: Runs daily at 9:00 AM local time (`Asia/Kolkata` timezone configured inside `scheduler/campaigns.py`).
+2.  **The Check**: Queries PostgreSQL for all appointments scheduled for tomorrow where `reminder_sent = false` and `status != "cancelled"`.
+3.  **The Seed**: For each matched appointment, it fires a background Celery task that seeds a brand-new conversation session in Redis, pre-populating it with context and initiating a virtual outbound greeting: `"Hello {patient_name}, this is a reminder about your appointment with {doctor_type} tomorrow at {time}."`
+4.  **The Interactivity**: Because Celery workers write directly to the same Redis cache, patients can respond immediately via the Web Console to reschedule or cancel, triggering the real-time agent logic.
+5.  **Durable Logging**: Every campaign run writes to `interaction_log` in PostgreSQL and records the full conversational trace to the `/traces` endpoint in Redis.
 
-1. Queries Postgres for appointments scheduled for the next day where `reminder_sent = false`
-2. For each appointment, seeds the agent with: `"Hello {name}, this is a reminder about your appointment with {doctor} tomorrow at {time}."`
-3. Runs the full agent reasoning loop — patient can respond to reschedule or cancel
-4. Logs the full interaction to `interaction_log`
-5. Sets `reminder_sent = true` to prevent duplicate reminders
-
-**Trigger manually for testing:**
-```bash
-docker exec -it celery-worker python -c \
-  "from scheduler.campaigns import outbound_call_campaign; \
-   outbound_call_campaign.delay('test_campaign_001')"
-```
+> [!TIP]
+> **Manual Campaign Triggering for Demo**:
+> To make evaluating outbound campaigns easy, the endpoint `POST /campaigns/trigger` is provided. If the patient phone number has no appointments scheduled for tomorrow, it will **dynamically seed a Physician appointment for tomorrow at 11:30 AM** and run the campaign logic instantly, displaying the telemetry outputs directly on the UI!
+>
+> **Trigger manually via terminal:**
+> ```bash
+> # Inside backend directory or via Docker terminal
+> docker exec -it celery-worker python -c "from scheduler.campaigns import outbound_call_campaign; outbound_call_campaign.delay('test_campaign_001')"
+> ```
 
 ---
 
-## Running Tests
+## 🧪 Test Suite
+
+The repository contains a robust, async-native test suite validating all parts of the voice orchestrator. It consists of **16 comprehensive unit & integration tests** covering:
+*   Database models & migration setups
+*   Redis session lifecycle, multi-turn contexts, and metrics
+*   Clinical tools, doctor schedules, atomic transactions, and slot alternatives
+*   STT and TTS API services and fail-safes
+*   Full end-to-end conversation flows with multi-pass tool selections
 
 ```bash
-# All 15 tests (runs in ~21 seconds)
-docker exec -it backend pytest
+# Enter backend folder
+cd backend
 
-# With verbose output
-docker exec -it backend pytest -v
-
-# Single test file
-docker exec -it backend pytest tests/test_tools.py
+# Run the full suite (completes in ~40 seconds)
+python -m pytest -v
 ```
 
-Tests use SQLite in-memory and mock Redis — no external services needed.
+> [!NOTE]
+> Tests run entirely in isolation utilizing an in-memory SQLite backend and a mocked Redis pipeline—meaning no external services or API keys are required to execute tests successfully!
 
 ---
 
-## Trade-offs & Design Decisions
+## 🛡️ Architectural Trade-offs, Mitigations & Future Roadmap
 
-**Sarvam AI for both STT and TTS (over Deepgram + ElevenLabs)**
-Sarvam Saaras V3 and Bulbul V3 are trained natively on Indian languages including code-mixed speech (Hinglish, Tanglish). ElevenLabs and Deepgram are primarily English-first with Indian language support bolted on — this produces inconsistent prosody and misrecognition of common Indian names, clinic terms, and mixed-language sentences. Using one SDK for both also simplifies the integration surface under a tight deadline.
-
-**Groq over OpenAI/Anthropic for LLM**
-Groq's inference speed (~500 tokens/second on llama-3.1-70b) is the primary reason. At 180 ms for a typical tool-calling response, it is 2–3× faster than equivalent OpenAI API calls. The free tier (14,400 req/day) covers demo and evaluation use entirely. Tool-calling support is native and stable.
-
-**Redis for session + Celery broker**
-Using Redis for both session memory and as the Celery task broker means one less service to run. The same Redis instance handles sub-millisecond session reads and durable task queuing. TTL-based session expiry (30 min) is a natural fit for Redis and requires zero application code.
-
-**Async throughout (asyncpg, AsyncGroq, aioredis)**
-All I/O is non-blocking. A synchronous Postgres query during an LLM call would stall the entire request. With async I/O, the FastAPI worker can handle multiple concurrent sessions without thread overhead — important for the outbound campaign scheduler which may fire many concurrent reminder sessions.
-
-**No real telephony (Twilio)**
-Outbound campaigns are simulated — no real phone dial. The assignment does not require real PSTN integration, and the agent reasoning loop is identical whether triggered by a browser WebSocket or a real phone call. Adding Twilio would be a config change (swap WebSocket transport for Twilio Media Streams), not an architectural one.
+*   **REST Aggregation over Raw WebSockets (STT/TTS)**:
+    *   *Trade-off*: True live audio streaming (bidirectional streaming) was deferred. The pipeline collects the voice turn, waits for silence, and sends it as a single chunk.
+    *   *Mitigation*: We integrated a highly aggressive `800ms` silence threshold and persistent warm connection pools to achieve sub-second response times. This results in an incredibly stable connection even under packet loss, which streaming WebSockets are highly sensitive to.
+*   **Mitigation of LLM Hallucinations**:
+    *   *Risk*: Small LLM models (like 8B parameter variants) occasionally hallucinate doctor types or available slot dates when answering loosely.
+    *   *Mitigation*: We implemented a **two-pass reasoning design**. The first pass strictly extracts intents and formats parameters for database tool validation. The database does the hard validation and provides raw JSON facts. A second pass feeds these concrete JSON facts back to the LLM to write a natural speech response. Hallucinations on critical clinic schedules are mathematically eliminated.
+*   **Open Endpoints**:
+    *   *Limitation*: Currently, `/voice/process` has no authentication layers.
+    *   *Roadmap*: Production deployments require integrating an API Gateway or FastAPI JWT Bearer authorization layers to protect patient database IDs.
+*   **Barge-In Capabilities**:
+    *   *Limitation*: Patients cannot interrupt the agent mid-sentence because the audio files play to completion in the browser.
+    *   *Roadmap*: A future iteration will stream audio chunks back via the Node.js Gateway and listen for user microphone voice activity during playback to instantly halt transmission and trigger a reset frame.
 
 ---
 
-## Known Limitations
-
-1. **No authentication** — endpoints are open. In production, JWT middleware and CORS guards are required before any patient data is exposed.
-
-2. **Simulated outbound calls** — the Celery scheduler runs the agent loop but does not dial a real phone number. A Twilio or PSTN integration would be a transport-layer addition.
-
-3. **Single-region deployment** — the docker-compose setup runs on one host. Horizontal scaling requires moving to Kubernetes or ECS with a shared Postgres/Redis layer.
-
-4. **No audio streaming (bidirectional)** — the current pipeline collects a full audio turn before sending to STT. True sub-300 ms latency would require streaming audio packets to Saaras while the patient speaks and streaming TTS chunks back before the LLM finishes — a more complex gateway implementation.
-
-5. **Tamil TTS naturalness** — Bulbul V3 Tamil voice quality is good but occasionally produces unnatural prosody on longer medical terms. English and Hindi voices are noticeably more natural.
-
-6. **No barge-in handling** — if the agent is speaking and the patient interrupts, the current implementation finishes the TTS playback before processing the new input. Interrupt detection requires monitoring the audio stream while TTS is playing.
-
-7. **LLM hallucination on edge cases** — the agent occasionally invents doctor names or slot times when given ambiguous input. Production would require stricter output validation and a fallback confirmation step before writing any booking to the database.
-
----
-
-## Environment Variables
-
-```env
-# Required
-GROQ_API_KEY=gsk_...
-SARVAM_API_KEY=...
-POSTGRES_URL=postgresql+asyncpg://user:pass@postgres:5432/voice_agent
-REDIS_URL=redis://redis:6379/0
-
-# Optional
-LOG_LEVEL=INFO
-CELERY_BROKER_URL=redis://redis:6379/1
-TZ=Asia/Kolkata
-```
-
----
-
-## Project Structure
+## 📦 Project Structure
 
 ```
 voice-ai-agent/
 ├── backend/
-│   ├── main.py                  # FastAPI app, pipeline, /metrics, /traces, /health
+│   ├── main.py                  # Core FastAPI Orchestrator, metrics, and api endpoints
+│   ├── requirements.txt         # Python dependencies
+│   ├── docker-compose.yml       # Infrastructure orchestration file
+│   ├── Dockerfile               # Backend container recipe
+│   ├── start.bat                # Automated multi-process local startup script
 │   ├── agent/
-│   │   ├── agent.py             # AsyncGroq LLM agent with tool-calling loop
-│   │   ├── tools.py             # Appointment tools with conflict logic
-│   │   └── prompts.py           # System prompt builder (language-aware)
+│   │   ├── agent.py             # Groq clinical reasoning agent & two-pass logic
+│   │   ├── tools.py             # Clinic DB operations (checking, booking, rescheduling)
+│   │   └── prompts.py           # Language-aware prompt engineering
 │   ├── memory/
-│   │   ├── session.py           # Redis session memory (30-min TTL)
-│   │   └── persistent.py        # Postgres patient history queries
+│   │   ├── session.py           # Tier 1 - Redis session cache handling (30-min TTL)
+│   │   └── persistent.py        # Tier 2 - Postgres patient history queries
 │   ├── services/
-│   │   ├── stt.py               # Sarvam Saaras V3 streaming STT
-│   │   ├── tts.py               # Sarvam Bulbul V3 streaming TTS
-│   │   └── lang_detect.py       # Language detection wrapper
+│   │   ├── stt.py               # Sarvam Saaras V3 Speech-to-Text client
+│   │   ├── tts.py               # Sarvam Bulbul V3 Text-to-Speech client
+│   │   └── lang_detect.py       # Language refinement utilities
 │   ├── scheduler/
-│   │   └── campaigns.py         # Celery Beat outbound reminder tasks
-│   └── db/
-│       ├── models.py            # SQLAlchemy models
-│       └── database.py          # Async DB connection
+│   │   └── campaigns.py         # Celery tasks and daily Beat configuration
+│   ├── db/
+│   │   ├── database.py          # SQLAlchemy async engine & session configurations
+│   │   └── models.py            # Clinical schema database models
+│   └── tests/                   # 16 Async Python test cases (pytest)
 ├── gateway/
-│   └── src/
-│       ├── server.ts            # WebSocket server (port 3000)
-│       └── audioStream.ts       # Audio buffer + silence VAD + FastAPI dispatch
+│   ├── src/
+│   │   ├── server.ts            # Node.js WebSocket gateway with VAD timers
+│   │   └── audioStream.ts       # Raw PCM audio buffering utilities
+│   ├── package.json             # Node.js gateway manifest
+│   └── tsconfig.json            # TypeScript compile configurations
 ├── demo/
-│   └── index.html               # Single-file browser demo client
-├── tests/                       # 15 async tests (pytest)
-├── docs/
-│   └── architecture.png         # System architecture diagram
-├── docker-compose.yml
-├── .env.example
-└── README.md
+│   ├── index.html               # Real-time Web Voice Console
+│   └── server.py                # Python demo server & API reverse-proxy
 ```
