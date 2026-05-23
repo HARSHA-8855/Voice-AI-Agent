@@ -93,8 +93,28 @@ class ClinicalAgent:
         today = datetime.now().strftime("%Y-%m-%d")
         base_prompt = get_system_prompt()
         patient_id = history.get("id") or ""
+        
+        # Map ISO language codes to full names and native script directives
+        lang_map = {
+            "en": "English",
+            "hi": "Hindi (हिंदी)",
+            "ta": "Tamil (தமிழ்)",
+            "te": "Telugu (తెలుగు)"
+        }
+        target_lang = lang_map.get(str(language).lower(), "English")
+        
         prompt = f"""{base_prompt}
-Current language: {language}. Respond ONLY in this language.
+
+=== CRITICAL LANGUAGE CONSTRAINT ===
+The target language for this turn is: **{target_lang}**.
+YOU MUST GENERATE YOUR FINAL TEXT RESPONSE STRICTLY IN **{target_lang}**.
+- If target language is Hindi, write ONLY in Hindi (Devanagari script).
+- If target language is Tamil, write ONLY in Tamil script.
+- If target language is English, write ONLY in English.
+DO NOT use any other language or script.
+Even if the patient spoke in another language, or the conversation history has turns in another language, you MUST ignore that and respond ONLY and entirely in **{target_lang}**.
+=====================================
+
 Patient info and history: {json.dumps(history)}
 Current session state: {json.dumps(session)}
 Today's date: {today}

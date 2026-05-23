@@ -34,6 +34,63 @@ class AppointmentConflictError(ClinicalClinicError):
 
 # --- Internal Helper Functions ---
 
+def to_12hr(time_val: Any) -> str:
+    """
+    Converts a time object or a "HH:MM" string to a clean 12-hour AM/PM string
+    (e.g., "10:00 AM", "2:30 PM"), stripping any leading zero on the hour.
+    """
+    if not time_val:
+        return ""
+    try:
+        if isinstance(time_val, time):
+            dt = datetime.combine(date.today(), time_val)
+        elif isinstance(time_val, datetime):
+            dt = time_val
+        else:
+            dt = datetime.strptime(str(time_val).strip(), "%H:%M")
+        formatted = dt.strftime("%I:%M %p")
+        if formatted.startswith("0"):
+            formatted = formatted[1:]
+        return formatted
+    except Exception:
+        return str(time_val)
+
+def parse_time_str(time_str: str) -> time:
+    """
+    Robustly parses diverse time formats (e.g. "10:00 AM", "10:00AM", "10 AM", "2 PM", "14:30")
+    into a standard datetime.time object.
+    """
+    t_str = str(time_str).strip().upper()
+    
+    # Standard 12-hour or 24-hour formats
+    formats = [
+        "%I:%M %p",  # "10:00 AM"
+        "%I:%M%p",   # "10:00AM"
+        "%H:%M",     # "14:30"
+        "%H:%M:%S"   # "14:30:00"
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(t_str, fmt).time()
+        except ValueError:
+            continue
+            
+    # Handle single hour formats e.g. "10 AM", "2 PM", "10AM", "2PM"
+    try:
+        if "AM" in t_str or "PM" in t_str:
+            if ":" not in t_str:
+                # Add ":00" to make it compatible with "%I:%M %p" / "%I:%M%p"
+                t_str_with_minutes = t_str.replace("AM", ":00 AM").replace("PM", ":00 PM").replace("  ", " ")
+                for fmt in ["%I:%M %p", "%I:%M%p"]:
+                    try:
+                        return datetime.strptime(t_str_with_minutes, fmt).time()
+                    except ValueError:
+                        continue
+    except Exception:
+        pass
+        
+    raise ClinicalClinicError(f"The time format '{time_str}' is invalid. Please specify a time like '10:00 AM' or '2:30 PM'.")
+
 async def _get_alternative_slots(
     db: AsyncSession,
     doctor_type: str,
@@ -78,7 +135,7 @@ async def _get_alternative_slots(
                 
             alternatives.append({
                 "date": sched.date.isoformat(),
-                "time": slot
+                "time": to_12hr(slot)
             })
             if len(alternatives) == limit:
                 return alternatives
@@ -104,7 +161,7 @@ async def _get_alternative_slots(
                 if slot_datetime < current_now:
                     continue
                 
-                candidate = {"date": sched.date.isoformat(), "time": slot}
+                candidate = {"date": sched.date.isoformat(), "time": to_12hr(slot)}
                 if candidate not in alternatives:
                     alternatives.append(candidate)
                     if len(alternatives) == limit:
@@ -157,7 +214,7 @@ async def check_availability(db: AsyncSession, doctor_type: str, date_str: str) 
                 slot_time = datetime.strptime(slot, "%H:%M").time()
                 slot_datetime = datetime.combine(parsed_date, slot_time)
                 if slot_datetime >= current_now:
-                    free_slots.append(slot)
+                    free_slots.append(to_12hr(slot))
 
     # 6. Return slots or alternative future dates
     if free_slots:
@@ -190,7 +247,7 @@ async def check_availability(db: AsyncSession, doctor_type: str, date_str: str) 
             for s in f_free:
                 s_time = datetime.strptime(s, "%H:%M").time()
                 if datetime.combine(f_sched.date, s_time) >= datetime.now():
-                    f_valid.append(s)
+                    f_valid.append(to_12hr(s))
             
             if f_valid:
                 alternative_dates.append({
@@ -221,9 +278,11 @@ async def book_appointment(
     # 1. Parse and validate date and time format
     try:
         parsed_date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        parsed_time = datetime.strptime(time_str, "%H:%M").time()
-    except ValueError:
-        raise ClinicalClinicError("Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for time.")
+        parsed_time = parse_time_str(time_str)
+    except ClinicalClinicError:
+        raise
+    except Exception:
+        raise ClinicalClinicError("Invalid date or time format. Use YYYY-MM-DD for date and HH:MM or 12hr format for time.")
 
     # 2. Check if the slot is in the past
     requested_datetime = datetime.combine(parsed_date, parsed_time)
@@ -237,6 +296,21 @@ async def book_appointment(
     if not patient:
         raise PatientNotFoundError(f"Patient with ID {patient_id} does not exist.")
 
+    # 3b. Check if the patient already has an active (non-cancelled) appointment at the exact same date and time
+    conflict_appt_stmt = select(Appointment).where(
+        Appointment.patient_id == patient_id,
+        Appointment.date == parsed_date,
+        Appointment.time == parsed_time,
+        Appointment.status != "cancelled"
+    )
+    conflict_appt_res = await db.execute(conflict_appt_stmt)
+    conflict_appt = conflict_appt_res.scalar_one_or_none()
+    if conflict_appt:
+        error_msg = f"You already have an appointment scheduled for {date_str} at {to_12hr(parsed_time)} with a {conflict_appt.doctor_type}."
+        # Search for alternative slots for the requested doctor_type
+        alternatives = await _get_alternative_slots(db, doctor_type, parsed_date, parsed_time)
+        raise AppointmentConflictError(error_msg, alternatives)
+
     # 4. Fetch the doctor's schedule for that date
     sched_stmt = select(DoctorSchedule).where(
         DoctorSchedule.doctor_type == doctor_type,
@@ -249,15 +323,17 @@ async def book_appointment(
     is_conflict = False
     error_msg = ""
     
+    db_time_str = parsed_time.strftime("%H:%M")
+    
     if not schedule:
         is_conflict = True
         error_msg = f"No schedule exists for a {doctor_type} on {date_str}."
-    elif time_str not in schedule.available_slots:
+    elif db_time_str not in schedule.available_slots:
         is_conflict = True
-        error_msg = f"The time slot {time_str} is not a valid clinic slot for a {doctor_type} on {date_str}."
-    elif time_str in schedule.booked_slots:
+        error_msg = f"The time slot {to_12hr(parsed_time)} is not a valid clinic slot for a {doctor_type} on {date_str}."
+    elif db_time_str in schedule.booked_slots:
         is_conflict = True
-        error_msg = f"The requested time slot {time_str} is already booked for a {doctor_type} on {date_str}."
+        error_msg = f"The requested time slot {to_12hr(parsed_time)} is already booked for a {doctor_type} on {date_str}."
 
     if is_conflict:
         # Search for 3 alternative slots
@@ -266,7 +342,7 @@ async def book_appointment(
 
     # 6. Book slot: Update booked_slots list
     updated_booked = list(schedule.booked_slots)
-    updated_booked.append(time_str)
+    updated_booked.append(db_time_str)
     schedule.booked_slots = updated_booked
 
     # 7. Write to appointments table
@@ -281,15 +357,15 @@ async def book_appointment(
     await db.commit()
     await db.refresh(new_appt)
 
-    logger.info(f"Booked appointment ID {new_appt.id} for patient {patient_id} on {date_str} at {time_str}")
+    logger.info(f"Booked appointment ID {new_appt.id} for patient {patient_id} on {date_str} at {to_12hr(parsed_time)}")
     return {
         "status": "success",
         "appointment_id": new_appt.id,
         "patient_name": patient.name,
         "doctor_type": doctor_type,
         "date": date_str,
-        "time": time_str,
-        "confirmation_message": f"Appointment successfully scheduled with a {doctor_type} on {date_str} at {time_str}."
+        "time": to_12hr(parsed_time),
+        "confirmation_message": f"Appointment successfully scheduled with a {doctor_type} on {date_str} at {to_12hr(parsed_time)}."
     }
 
 async def cancel_appointment(db: AsyncSession, appointment_id: int, patient_id: int) -> Dict[str, Any]:
@@ -367,9 +443,11 @@ async def reschedule_appointment(
     # Parse and validate new date/time format
     try:
         parsed_new_date = datetime.strptime(new_date_str, "%Y-%m-%d").date()
-        parsed_new_time = datetime.strptime(new_time_str, "%H:%M").time()
-    except ValueError:
-        raise ClinicalClinicError("Invalid date or time format. Use YYYY-MM-DD for date and HH:MM for time.")
+        parsed_new_time = parse_time_str(new_time_str)
+    except ClinicalClinicError:
+        raise
+    except Exception:
+        raise ClinicalClinicError("Invalid date or time format. Use YYYY-MM-DD for date and HH:MM or 12hr format for time.")
 
     # Verify slot is not in the past
     new_requested_datetime = datetime.combine(parsed_new_date, parsed_new_time)
@@ -381,7 +459,23 @@ async def reschedule_appointment(
     old_date = appointment.date
     old_time_str = appointment.time.strftime("%H:%M")
 
-    # 3. Release the old slot temporarily in the database session
+    # 3. Check if the patient already has an active (non-cancelled) appointment at the exact same date and time
+    # excluding the appointment we are currently rescheduling
+    conflict_appt_stmt = select(Appointment).where(
+        Appointment.patient_id == patient_id,
+        Appointment.date == parsed_new_date,
+        Appointment.time == parsed_new_time,
+        Appointment.id != appointment_id,
+        Appointment.status != "cancelled"
+    )
+    conflict_appt_res = await db.execute(conflict_appt_stmt)
+    conflict_appt = conflict_appt_res.scalar_one_or_none()
+    if conflict_appt:
+        error_msg = f"You already have an appointment scheduled for {new_date_str} at {to_12hr(parsed_new_time)} with a {conflict_appt.doctor_type}."
+        alternatives = await _get_alternative_slots(db, old_doctor_type, parsed_new_date, parsed_new_time)
+        raise AppointmentConflictError(error_msg, alternatives)
+
+    # 3b. Release the old slot temporarily in the database session
     old_sched_stmt = select(DoctorSchedule).where(
         DoctorSchedule.doctor_type == old_doctor_type,
         DoctorSchedule.date == old_date
@@ -403,16 +497,18 @@ async def reschedule_appointment(
     # 5. Check conflicts on the new slot
     is_conflict = False
     error_msg = ""
+    
+    new_db_time_str = parsed_new_time.strftime("%H:%M")
 
     if not new_schedule:
         is_conflict = True
         error_msg = f"No schedule exists for a {old_doctor_type} on {new_date_str}."
-    elif new_time_str not in new_schedule.available_slots:
+    elif new_db_time_str not in new_schedule.available_slots:
         is_conflict = True
-        error_msg = f"The time slot {new_time_str} is not a valid clinic slot for a {old_doctor_type} on {new_date_str}."
-    elif new_time_str in new_schedule.booked_slots:
+        error_msg = f"The time slot {to_12hr(parsed_new_time)} is not a valid clinic slot for a {old_doctor_type} on {new_date_str}."
+    elif new_db_time_str in new_schedule.booked_slots:
         is_conflict = True
-        error_msg = f"The requested time slot {new_time_str} is already booked for a {old_doctor_type} on {new_date_str}."
+        error_msg = f"The requested time slot {to_12hr(parsed_new_time)} is already booked for a {old_doctor_type} on {new_date_str}."
 
     if is_conflict:
         # Roll back released old slot before raising conflict error
@@ -423,7 +519,7 @@ async def reschedule_appointment(
 
     # 6. Apply new booking slot updates
     updated_new_booked = list(new_schedule.booked_slots)
-    updated_new_booked.append(new_time_str)
+    updated_new_booked.append(new_db_time_str)
     new_schedule.booked_slots = updated_new_booked
 
     # 7. Update appointment record details
@@ -434,14 +530,14 @@ async def reschedule_appointment(
     await db.commit()
     await db.refresh(appointment)
 
-    logger.info(f"Rescheduled appointment ID {appointment_id} to {new_date_str} at {new_time_str}")
+    logger.info(f"Rescheduled appointment ID {appointment_id} to {new_date_str} at {to_12hr(parsed_new_time)}")
     return {
         "status": "success",
         "appointment_id": appointment.id,
         "doctor_type": old_doctor_type,
         "date": new_date_str,
-        "time": new_time_str,
-        "confirmation_message": f"Appointment successfully rescheduled to {new_date_str} at {new_time_str}."
+        "time": to_12hr(parsed_new_time),
+        "confirmation_message": f"Appointment successfully rescheduled to {new_date_str} at {to_12hr(parsed_new_time)}."
     }
 
 # --- Database Seeding Function for Demo Purposes ---

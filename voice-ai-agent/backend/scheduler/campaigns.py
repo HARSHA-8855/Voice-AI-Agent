@@ -43,6 +43,7 @@ async def run_outbound_campaign(campaign_id: str) -> None:
     from db.database import AsyncSessionLocal
     from db.models import Appointment, Patient, InteractionLog
     from agent.agent import run_agent
+    from agent.tools import to_12hr
 
     tomorrow = date.today() + timedelta(days=1)
     logger.info(f"[Campaign {campaign_id}] Running outbound reminders for date: {tomorrow}")
@@ -66,7 +67,7 @@ async def run_outbound_campaign(campaign_id: str) -> None:
         logger.info(f"[Campaign {campaign_id}] Found {len(appointments_data)} appointments to process.")
 
         for appt, patient in appointments_data:
-            time_str = appt.time.strftime("%H:%M") if appt.time else "10:00"
+            time_str = to_12hr(appt.time) if appt.time else "10:00 AM"
             session_id = f"outbound_{campaign_id}_{appt.id}_{int(datetime.utcnow().timestamp())}"
 
             # 2. Build session context

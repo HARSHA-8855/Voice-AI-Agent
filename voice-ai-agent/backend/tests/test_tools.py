@@ -50,7 +50,7 @@ async def test_tools_full_workflow():
         avail = await check_availability(session, "Cardiologist", tomorrow_str)
         assert avail["status"] == "success"
         assert avail["doctor_type"] == "Cardiologist"
-        assert "09:00" in avail["available_slots"]
+        assert "9:00 AM" in avail["available_slots"]
         
         # Check past date error
         past_date_str = (date.today() - timedelta(days=1)).isoformat()
@@ -63,7 +63,7 @@ async def test_tools_full_workflow():
 
         # --- TEST BOOK APPOINTMENT ---
         # Select an available slot for tomorrow
-        target_slot = avail["available_slots"][0]
+        target_slot = avail["available_slots"][0] # "9:00 AM"
         
         # Book appointment
         booking = await book_appointment(session, patient_id, "Cardiologist", tomorrow_str, target_slot)
@@ -80,7 +80,7 @@ async def test_tools_full_workflow():
         )
         res = await session.execute(stmt)
         sched = res.scalar_one()
-        assert target_slot in sched.booked_slots
+        assert "09:00" in sched.booked_slots
         
         # Book already booked slot error (Conflict)
         with pytest.raises(AppointmentConflictError) as exc_info:
@@ -96,7 +96,7 @@ async def test_tools_full_workflow():
         # Verify slot is released in schedule
         res = await session.execute(stmt)
         sched = res.scalar_one()
-        assert target_slot not in sched.booked_slots
+        assert "09:00" not in sched.booked_slots
         
         # Verify appointment status is cancelled
         res_appt = await session.execute(select(Appointment).where(Appointment.id == appt_id))
@@ -117,7 +117,7 @@ async def test_tools_full_workflow():
             session, appt_id_resch, patient_id, tomorrow_str, "11:30"
         )
         assert rescheduling["status"] == "success"
-        assert rescheduling["time"] == "11:30"
+        assert rescheduling["time"] == "11:30 AM"
         
         # Verify old slot ("10:00") is freed, and new slot ("11:30") is booked
         stmt_dentist = select(DoctorSchedule).where(
@@ -134,5 +134,40 @@ async def test_tools_full_workflow():
         appt = res_appt.scalar_one()
         assert appt.time.strftime("%H:%M") == "11:30"
         assert appt.status == "rescheduled"
+        
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_patient_double_booking_conflict():
+    # Initialize SQLite in-memory async engine
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+    async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        
+    async with async_session() as session:
+        await seed_demo_data(session)
+        
+        # Fetch patient
+        from sqlalchemy import select
+        res_patient = await session.execute(select(Patient))
+        patient = res_patient.scalars().first()
+        patient_id = patient.id
+        
+        tomorrow_str = (date.today() + timedelta(days=1)).isoformat()
+        
+        # 1. Book first appointment at 10:00 AM with Dentist
+        booking1 = await book_appointment(session, patient_id, "Dentist", tomorrow_str, "10:00 AM")
+        assert booking1["status"] == "success"
+        
+        # 2. Attempt to book another appointment at 10:00 AM with Cardiologist for the same patient
+        # This must raise AppointmentConflictError owing to patient double-booking!
+        with pytest.raises(AppointmentConflictError) as exc_info:
+            await book_appointment(session, patient_id, "Cardiologist", tomorrow_str, "10:00 AM")
+            
+        assert "already have an appointment" in str(exc_info.value)
+        assert len(exc_info.value.alternatives) > 0
         
     await engine.dispose()
